@@ -28,6 +28,10 @@
         <div class="value core">{{ stats.corePending || 0 }}</div>
       </div>
       <div class="stat-card">
+        <div class="label">燃油异常</div>
+        <div class="value" style="color: #d03050;">{{ stats.fuelAbnormalCount || 0 }}</div>
+      </div>
+      <div class="stat-card">
         <div class="label">已确认恢复</div>
         <div class="value" style="color:#18a058">{{ stats.confirmed || 0 }}</div>
       </div>
@@ -131,7 +135,23 @@
       </template>
     </n-modal>
 
-    <n-modal v-model:show="confirmModalShow" preset="card" style="width: 640px;" title="区域经理恢复确认">
+    <n-modal v-model:show="confirmModalShow" preset="card" style="width: 680px;" title="区域经理恢复确认">
+      <div v-if="confirmRecord.hasFuelAbnormal" style="background: #fff1f0; border: 1px solid #ffccc7; padding: 12px; border-radius: 8px; margin-bottom: 16px; display: flex; align-items: flex-start; gap: 8px;">
+        <n-icon size="20" style="color: #d03050; flex-shrink: 0; margin-top: 2px;">
+          <AlertCircleOutline />
+        </n-icon>
+        <div>
+          <div style="font-weight: 600; color: #d03050; margin-bottom: 4px;">燃油消耗异常</div>
+          <div style="font-size: 13px; color: #cf1322;">
+            该派单燃油消耗存在异常，请区域经理重点关注。建议核实燃油消耗情况后再确认恢复。
+          </div>
+          <div v-if="confirmRecord.latestFuelRecord" style="font-size: 12px; color: #8c8c8c; margin-top: 6px;">
+            初始油量：{{ confirmRecord.latestFuelRecord.initialFuel }}L，剩余油量：{{ confirmRecord.latestFuelRecord.remainingFuel }}L，
+            实际消耗：{{ confirmRecord.latestFuelRecord.consumption }}L，标准消耗：{{ confirmRecord.latestFuelRecord.standardConsumption }}L
+          </div>
+        </div>
+      </div>
+
       <div style="background: #f7f8fa; padding: 16px; border-radius: 8px; margin-bottom: 16px;">
         <h4 style="margin: 0 0 12px 0; color: #1f1f1f;">恢复确认详情</h4>
         <div class="info-grid">
@@ -153,12 +173,25 @@
           <div class="info-item"><span class="info-label">油机停机时间</span><span class="info-value">{{ formatTime(confirmRecord.generatorStopTime) }}</span></div>
           <div class="info-item"><span class="info-label">发电时长</span><span class="info-value">{{ confirmRecord.totalGenerateDuration || 0 }} 小时</span></div>
           <div class="info-item"><span class="info-label">燃油消耗</span><span class="info-value">{{ confirmRecord.totalFuelConsumption || 0 }} L</span></div>
+          <div class="info-item">
+            <span class="info-label">燃油状态</span>
+            <span class="info-value">
+              <n-tag v-if="confirmRecord.hasFuelAbnormal" type="error" size="small">异常</n-tag>
+              <n-tag v-else-if="confirmRecord.fuelAbnormalStatus === 'explained'" type="warning" size="small">已说明</n-tag>
+              <n-tag v-else-if="confirmRecord.fuelAbnormalStatus === 'normal'" type="success" size="small">正常</n-tag>
+              <n-tag v-else type="default" size="small">未登记</n-tag>
+            </span>
+          </div>
           <div class="info-item"><span class="info-label">维护人员</span><span class="info-value">{{ confirmRecord.maintainer || '-' }}</span></div>
           <div class="info-item"><span class="info-label">提交时间</span><span class="info-value">{{ formatTime(confirmRecord.maintainerConfirmTime) }}</span></div>
         </div>
         <div v-if="confirmRecord.photoUrl" style="margin-top: 12px;">
           <div style="font-size: 13px; color: #8c8c8c; margin-bottom: 6px;">现场照片：</div>
           <img :src="confirmRecord.photoUrl" class="photo-preview" style="width: 160px; height: 120px;" @click="previewImage(confirmRecord.photoUrl)" />
+        </div>
+        <div v-if="confirmRecord.remark" style="margin-top: 12px;">
+          <div style="font-size: 13px; color: #8c8c8c; margin-bottom: 4px;">备注：</div>
+          <div style="font-size: 13px; color: #1f1f1f;">{{ confirmRecord.remark }}</div>
         </div>
       </div>
 
@@ -256,6 +289,24 @@ const pendingColumns = [
   },
   { title: '发电时长', key: 'totalGenerateDuration', width: 100, render: (r) => `${r.totalGenerateDuration || 0}h` },
   { title: '燃油消耗', key: 'totalFuelConsumption', width: 100, render: (r) => `${r.totalFuelConsumption || 0}L` },
+  {
+    title: '燃油状态', key: 'fuelAbnormalStatus', width: 100,
+    render: (r) => {
+      if (r.hasFuelAbnormal) {
+        return h('div', { style: { display: 'flex', alignItems: 'center', gap: '4px' } }, [
+          h(NIcon, { size: 16, style: { color: '#d03050' } }, { default: () => h(AlertCircleOutline) }),
+          h(NTag, { type: 'error', size: 'small' }, { default: () => '异常' }),
+        ])
+      }
+      if (r.fuelAbnormalStatus === 'explained') {
+        return h(NTag, { type: 'warning', size: 'small' }, { default: () => '已说明' })
+      }
+      if (r.fuelAbnormalStatus === 'normal') {
+        return h(NTag, { type: 'success', size: 'small' }, { default: () => '正常' })
+      }
+      return h(NTag, { type: 'default', size: 'small' }, { default: () => '未登记' })
+    },
+  },
   { title: '维护人员', key: 'maintainer', width: 100 },
   { title: '提交时间', key: 'maintainerConfirmTime', width: 160, render: (r) => formatTime(r.maintainerConfirmTime) },
   {
@@ -271,7 +322,7 @@ const pendingColumns = [
     title: '操作', key: 'action', width: 160, fixed: 'right',
     render: (r) => h('div', { style: { display: 'flex', gap: '6px' } }, [
       h(NButton, {
-        size: 'small', type: r.needHighlight ? 'error' : 'primary',
+        size: 'small', type: r.needHighlight || r.hasFuelAbnormal ? 'error' : 'primary',
         onClick: () => openConfirmModal(r),
       }, { default: () => '经理确认' }),
       h(NTooltip, null, {
@@ -292,6 +343,24 @@ const allColumns = [
       h('div', { style: { fontWeight: 500 } }, r.stationName),
       h('div', { style: { marginTop: '2px' } }, renderLevelTag(r.stationLevel)),
     ]),
+  },
+  {
+    title: '燃油状态', key: 'fuelAbnormalStatus', width: 100,
+    render: (r) => {
+      if (r.hasFuelAbnormal) {
+        return h('div', { style: { display: 'flex', alignItems: 'center', gap: '4px' } }, [
+          h(NIcon, { size: 16, style: { color: '#d03050' } }, { default: () => h(AlertCircleOutline) }),
+          h(NTag, { type: 'error', size: 'small' }, { default: () => '异常' }),
+        ])
+      }
+      if (r.fuelAbnormalStatus === 'explained') {
+        return h(NTag, { type: 'warning', size: 'small' }, { default: () => '已说明' })
+      }
+      if (r.fuelAbnormalStatus === 'normal') {
+        return h(NTag, { type: 'success', size: 'small' }, { default: () => '正常' })
+      }
+      return h(NTag, { type: 'default', size: 'small' }, { default: () => '未登记' })
+    },
   },
   {
     title: '状态', key: 'status', width: 100,
@@ -406,7 +475,12 @@ async function submitCreate() {
 
 async function openConfirmModal(record) {
   currentRecordId.value = record.id
-  confirmRecord.value = { ...record }
+  try {
+    const detail = await getRecoveryDetail(record.id)
+    confirmRecord.value = { ...record, ...detail }
+  } catch (e) {
+    confirmRecord.value = { ...record }
+  }
   Object.assign(confirmForm, { regionalManager: '', managerRemark: '' })
   confirmModalShow.value = true
 }
@@ -427,6 +501,13 @@ async function doConfirm(isPass) {
 
 async function viewOne(id) {
   const r = await getRecoveryDetail(id)
+  const fuelStatusText = r.hasFuelAbnormal
+    ? '异常'
+    : r.fuelAbnormalStatus === 'explained'
+    ? '已说明'
+    : r.fuelAbnormalStatus === 'normal'
+    ? '正常'
+    : '未登记'
   dialog.info({
     title: '恢复确认详情',
     content: h('div', { style: { fontSize: '13px', lineHeight: '1.9' } }, [
@@ -438,6 +519,8 @@ async function viewOne(id) {
       h('div', `油机停机时间：${formatTime(r.generatorStopTime)}`),
       h('div', `发电时长：${r.totalGenerateDuration || 0} 小时`),
       h('div', `燃油消耗：${r.totalFuelConsumption || 0} L`),
+      h('div', `燃油状态：${fuelStatusText}`),
+      r.latestFuelRecord && h('div', `燃油详情：初始${r.latestFuelRecord.initialFuel}L / 剩余${r.latestFuelRecord.remainingFuel}L / 消耗${r.latestFuelRecord.consumption}L / 标准${r.latestFuelRecord.standardConsumption}L`),
       h('div', `维护人员：${r.maintainer || '-'}（${formatTime(r.maintainerConfirmTime)}）`),
       r.regionalManager && h('div', `区域经理：${r.regionalManager}（${formatTime(r.managerConfirmTime)}）`),
       r.managerRemark && h('div', `审核意见：${r.managerRemark}`),

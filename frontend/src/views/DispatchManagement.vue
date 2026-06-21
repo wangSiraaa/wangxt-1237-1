@@ -150,13 +150,25 @@
       </template>
     </n-modal>
 
-    <n-modal v-model:show="returnModalShow" preset="card" style="width: 480px;" title="归还油机确认">
+    <n-modal v-model:show="returnModalShow" preset="card" style="width: 520px;" title="归还油机确认">
       <n-alert type="info" style="margin-bottom: 16px;">
-        油机归还后将自动变为"空闲可用"状态，可再次进行派发
+        油机归还后将自动变为"空闲可用"状态，可再次进行派发。请如实登记剩余油量和油桶数量。
       </n-alert>
       <n-form :model="returnForm" label-placement="left" label-width="110px">
         <n-form-item label="发电时长(小时)">
           <n-input-number v-model:value="returnForm.totalDuration" :min="0" :step="0.1" style="width: 100%;" />
+        </n-form-item>
+        <n-form-item label="剩余油量(L)" required>
+          <n-input-number v-model:value="returnForm.returnedRemainingFuel" :min="0" :step="0.1" style="width: 100%;" placeholder="请输入归还时油桶剩余油量" />
+          <div v-if="returnForm.oilBucketCapacity" style="margin-top: 4px; font-size: 12px; color: #8c8c8c;">
+            初始油量：{{ returnForm.oilBucketCapacity }}L，预计消耗：{{ Math.max(0, returnForm.oilBucketCapacity - (returnForm.returnedRemainingFuel || 0)).toFixed(1) }}L
+          </div>
+        </n-form-item>
+        <n-form-item label="归还油桶数量">
+          <n-input-number v-model:value="returnForm.returnedOilBucketCount" :min="0" :step="1" style="width: 100%;" placeholder="请输入归还的油桶数量" />
+        </n-form-item>
+        <n-form-item label="登记人">
+          <n-input v-model:value="returnForm.recorder" placeholder="请输入登记人姓名" />
         </n-form-item>
         <n-form-item label="备注">
           <n-input v-model:value="returnForm.remark" type="textarea" placeholder="归还备注" />
@@ -212,7 +224,14 @@ const currentOrderId = ref(null)
 const assignForm = reactive({ maintenanceTeam: '', teamLeader: '', teamPhone: '', oilBucketCode: '', oilBucketCapacity: 0, dispatcher: '' })
 
 const returnModalShow = ref(false)
-const returnForm = reactive({ totalDuration: 0, remark: '' })
+const returnForm = reactive({
+  totalDuration: 0,
+  returnedRemainingFuel: null,
+  returnedOilBucketCount: null,
+  oilBucketCapacity: 0,
+  recorder: '',
+  remark: '',
+})
 
 const stationOptions = computed(() => pendingList.value
   .filter(s => !s.isDispatched)
@@ -283,7 +302,21 @@ const orderColumns = [
     ]),
   },
   { title: '油机', key: 'generatorCode', width: 160, render: (r) => (r.generatorCode || '-') + ' ' + (r.generatorName || '') },
-  { title: '油桶', key: 'oilBucketCode', width: 100, render: (r) => r.oilBucketCode ? `${r.oilBucketCode} (${r.oilBucketCapacity}L)` : '-' },
+  { title: '油桶', key: 'oilBucketCode', width: 120, render: (r) => r.oilBucketCode ? `${r.oilBucketCode} (${r.oilBucketCapacity}L)` : '-' },
+  {
+    title: '归还油量', key: 'returnedRemainingFuel', width: 100,
+    render: (r) => {
+      if (!r.generatorReturned) return '-'
+      return `${r.returnedRemainingFuel != null ? r.returnedRemainingFuel : '-'}L`
+    },
+  },
+  {
+    title: '油桶数量', key: 'returnedOilBucketCount', width: 90,
+    render: (r) => {
+      if (!r.generatorReturned) return '-'
+      return r.returnedOilBucketCount != null ? `${r.returnedOilBucketCount}个` : '-'
+    },
+  },
   {
     title: '派单状态', key: 'status', width: 100,
     render: (r) => {
@@ -421,11 +454,27 @@ async function confirmAssign() {
 
 function openReturnModal(row) {
   currentOrderId.value = row.id
-  Object.assign(returnForm, { totalDuration: row.totalDuration || 0, remark: '' })
+  Object.assign(returnForm, {
+    totalDuration: row.totalDuration || 0,
+    returnedRemainingFuel: row.returnedRemainingFuel != null ? row.returnedRemainingFuel : null,
+    returnedOilBucketCount: row.returnedOilBucketCount != null ? row.returnedOilBucketCount : null,
+    oilBucketCapacity: row.oilBucketCapacity || 0,
+    recorder: row.teamLeader || '',
+    remark: '',
+  })
   returnModalShow.value = true
 }
 
 async function confirmReturn() {
+  if (returnForm.returnedRemainingFuel == null || returnForm.returnedRemainingFuel === '') {
+    return message.warning('请输入剩余油量')
+  }
+  if (returnForm.returnedRemainingFuel < 0) {
+    return message.warning('剩余油量不能为负数')
+  }
+  if (returnForm.oilBucketCapacity && Number(returnForm.returnedRemainingFuel) > Number(returnForm.oilBucketCapacity)) {
+    return message.warning('剩余油量不能大于初始油量')
+  }
   try {
     await returnGenerator(currentOrderId.value, returnForm)
     message.success('油机归还确认成功，可再次派发')

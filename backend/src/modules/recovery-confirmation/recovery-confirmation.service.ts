@@ -1,9 +1,10 @@
 import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, In } from 'typeorm';
 import { RecoveryConfirmation, RecoveryStatus } from '../../entities/recovery-confirmation.entity';
 import { DispatchOrder, DispatchOrderStatus } from '../../entities/dispatch-order.entity';
 import { BaseStation, BaseStationStatus } from '../../entities/base-station.entity';
+import { FuelRecord, FuelAbnormalStatus } from '../../entities/fuel-record.entity';
 
 @Injectable()
 export class RecoveryConfirmationService {
@@ -14,6 +15,8 @@ export class RecoveryConfirmationService {
     private readonly orderRepo: Repository<DispatchOrder>,
     @InjectRepository(BaseStation)
     private readonly stationRepo: Repository<BaseStation>,
+    @InjectRepository(FuelRecord)
+    private readonly fuelRecordRepo: Repository<FuelRecord>,
   ) {}
 
   async findAll(params: any = {}): Promise<{ list: any[]; total: number }> {
@@ -42,6 +45,19 @@ export class RecoveryConfirmationService {
     const skip = (page - 1) * pageSize;
     const entities = await qb.skip(skip).take(pageSize).getMany();
 
+    const orderIds = entities.map(rc => rc.orderId).filter(Boolean);
+    const fuelRecords = orderIds.length > 0
+      ? await this.fuelRecordRepo.find({ where: { orderId: In(orderIds) } })
+      : [];
+
+    const fuelAbnormalMap = new Map<string, string>();
+    fuelRecords.forEach(fr => {
+      const current = fuelAbnormalMap.get(fr.orderId);
+      if (!current || fr.abnormalStatus === FuelAbnormalStatus.ABNORMAL) {
+        fuelAbnormalMap.set(fr.orderId, fr.abnormalStatus);
+      }
+    });
+
     const list = entities.map(rc => ({
       id: rc.id,
       orderId: rc.orderId,
@@ -61,6 +77,8 @@ export class RecoveryConfirmationService {
       managerConfirmTime: rc.managerConfirmTime,
       managerRemark: rc.managerRemark,
       photoUrl: rc.photoUrl,
+      fuelAbnormalStatus: fuelAbnormalMap.get(rc.orderId) || null,
+      hasFuelAbnormal: fuelAbnormalMap.get(rc.orderId) === FuelAbnormalStatus.ABNORMAL,
       needHighlight: rc.station?.level === 'core' && rc.status === RecoveryStatus.PENDING,
       createdAt: rc.createdAt,
     }));
@@ -68,19 +86,50 @@ export class RecoveryConfirmationService {
     return { list, total };
   }
 
-  async findOne(id: string): Promise<RecoveryConfirmation> {
+  async findOne(id: string): Promise<any> {
     const entity = await this.repo.findOne({ where: { id }, relations: ['station', 'order'] });
     if (!entity) throw new NotFoundException('恢复确认记录不存在');
-    return entity;
+
+    const fuelRecords = await this.fuelRecordRepo.find({
+      where: { orderId: entity.orderId },
+      order: { recordTime: 'DESC' },
+    });
+
+    const hasFuelAbnormal = fuelRecords.some(fr => fr.abnormalStatus === FuelAbnormalStatus.ABNORMAL);
+    const latestFuelRecord = fuelRecords.length > 0 ? fuelRecords[0] : null;
+
+    return {
+      ...entity,
+      fuelRecords,
+      latestFuelRecord,
+      hasFuelAbnormal,
+      fuelAbnormalStatus: hasFuelAbnormal ? FuelAbnormalStatus.ABNORMAL : (latestFuelRecord?.abnormalStatus || null),
+    };
   }
 
-  async findByOrderId(orderId: string): Promise<RecoveryConfirmation> {
+  async findByOrderId(orderId: string): Promise<any> {
     const entity = await this.repo.findOne({ where: { orderId }, relations: ['station', 'order'] });
-    return entity;
+    if (!entity) return null;
+
+    const fuelRecords = await this.fuelRecordRepo.find({
+      where: { orderId },
+      order: { recordTime: 'DESC' },
+    });
+
+    const hasFuelAbnormal = fuelRecords.some(fr => fr.abnormalStatus === FuelAbnormalStatus.ABNORMAL);
+    const latestFuelRecord = fuelRecords.length > 0 ? fuelRecords[0] : null;
+
+    return {
+      ...entity,
+      fuelRecords,
+      latestFuelRecord,
+      hasFuelAbnormal,
+      fuelAbnormalStatus: hasFuelAbnormal ? FuelAbnormalStatus.ABNORMAL : (latestFuelRecord?.abnormalStatus || null),
+    };
   }
 
   async createFromOrder(orderId: string, dto: any = {}): Promise<RecoveryConfirmation> {
-    const existing = await this.findByOrderId(orderId);
+    const existing = await this.repo.findOne({ where: { orderId } });
     if (existing) {
       throw new ConflictException('该派单已创建恢复确认记录');
     }
@@ -99,6 +148,12 @@ export class RecoveryConfirmationService {
       throw new ConflictException('油机未归还，无法确认恢复。请先归还油机');
     }
 
+    const fuelRecords = await this.fuelRecordRepo.find({
+      where: { orderId },
+      order: { recordTime: 'DESC' },
+    });
+    const latestFuelRecord = fuelRecords.length > 0 ? fuelRecords[0] : null;
+
     const entity = this.repo.create({
       orderId,
       stationId: order.stationId,
@@ -115,7 +170,14 @@ export class RecoveryConfirmationService {
       const duration = (entity.generatorStopTime.getTime() - order.startTime.getTime()) / (1000 * 60 * 60);
       entity.totalGenerateDuration = Number(duration.toFixed(2));
     }
-    entity.totalFuelConsumption = dto.totalFuelConsumption || 0;
+
+    if (dto.totalFuelConsumption != null) {
+      entity.totalFuelConsumption = dto.totalFuelConsumption;
+    } else if (latestFuelRecord) {
+      entity.totalFuelConsumption = Number(latestFuelRecord.consumption) || 0;
+    } else {
+      entity.totalFuelConsumption = 0;
+    }
 
     order.status = DispatchOrderStatus.COMPLETED;
     order.endTime = order.endTime || entity.generatorStopTime;
@@ -129,7 +191,11 @@ export class RecoveryConfirmationService {
     regionalManager: string;
     managerRemark?: string;
   }): Promise<RecoveryConfirmation> {
-    const record = await this.findOne(id);
+    const record = await this.repo.findOne({
+      where: { id },
+      relations: ['station', 'order'],
+    });
+    if (!record) throw new NotFoundException('恢复确认记录不存在');
 
     if (record.status !== RecoveryStatus.PENDING) {
       throw new ConflictException('该记录已处理，不能重复确认');
@@ -161,7 +227,8 @@ export class RecoveryConfirmationService {
   }
 
   async remove(id: string): Promise<void> {
-    const record = await this.findOne(id);
+    const record = await this.repo.findOne({ where: { id } });
+    if (!record) throw new NotFoundException('恢复确认记录不存在');
     if (record.status === RecoveryStatus.CONFIRMED) {
       throw new BadRequestException('已确认的记录不能删除');
     }
@@ -170,6 +237,8 @@ export class RecoveryConfirmationService {
 
   async getStatistics(): Promise<any> {
     const all = await this.repo.find({ relations: ['station'] });
+    const allFuelRecords = await this.fuelRecordRepo.find();
+    const abnormalFuelCount = allFuelRecords.filter(r => r.abnormalStatus === 'abnormal').length;
     return {
       total: all.length,
       pending: all.filter(r => r.status === RecoveryStatus.PENDING).length,
@@ -180,6 +249,7 @@ export class RecoveryConfirmationService {
         ? Number((all.reduce((s, r) => s + (Number(r.totalGenerateDuration) || 0), 0) / all.length).toFixed(2))
         : 0,
       totalFuel: Number(all.reduce((s, r) => s + (Number(r.totalFuelConsumption) || 0), 0).toFixed(2)),
+      fuelAbnormalCount: abnormalFuelCount,
     };
   }
 }

@@ -82,6 +82,12 @@ export class DispatchOrder {
   @Column({ type: 'timestamp', nullable: true })
   returnTime: Date;
 
+  @Column({ type: 'decimal', precision: 8, scale: 2, nullable: true })
+  returnedRemainingFuel: number;
+
+  @Column({ type: 'int', nullable: true })
+  returnedOilBucketCount: number;
+
   @Column({ type: 'text', nullable: true })
   remark: string;
 

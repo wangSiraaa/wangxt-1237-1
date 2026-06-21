@@ -4,6 +4,10 @@ import { Repository, In } from 'typeorm';
 import { DispatchOrder, DispatchOrderStatus } from '../../entities/dispatch-order.entity';
 import { BaseStation, BaseStationStatus, BaseStationLevel } from '../../entities/base-station.entity';
 import { Generator, GeneratorStatus } from '../../entities/generator.entity';
+import { FuelRecord, FuelAbnormalStatus } from '../../entities/fuel-record.entity';
+
+const ABNORMAL_THRESHOLD = 0.3;
+const STANDARD_CONSUMPTION_PER_HOUR = 5;
 
 @Injectable()
 export class DispatchOrderService {
@@ -14,6 +18,8 @@ export class DispatchOrderService {
     private readonly stationRepo: Repository<BaseStation>,
     @InjectRepository(Generator)
     private readonly generatorRepo: Repository<Generator>,
+    @InjectRepository(FuelRecord)
+    private readonly fuelRecordRepo: Repository<FuelRecord>,
   ) {}
 
   private generateOrderNo(): string {
@@ -59,6 +65,8 @@ export class DispatchOrderService {
       generatorName: o.generator?.name,
       oilBucketCode: o.oilBucketCode,
       oilBucketCapacity: o.oilBucketCapacity,
+      returnedRemainingFuel: o.returnedRemainingFuel,
+      returnedOilBucketCount: o.returnedOilBucketCount,
       status: o.status,
       powerOutTime: o.powerOutTime,
       dispatcher: o.dispatcher,
@@ -211,15 +219,62 @@ export class DispatchOrderService {
     order.generatorReturned = true;
     order.returnTime = new Date();
 
+    if (dto.endTime) order.endTime = dto.endTime;
+    if (dto.totalDuration) order.totalDuration = dto.totalDuration;
+    if (dto.returnedRemainingFuel != null) order.returnedRemainingFuel = dto.returnedRemainingFuel;
+    if (dto.returnedOilBucketCount != null) order.returnedOilBucketCount = dto.returnedOilBucketCount;
+
     if (order.generator) {
       order.generator.status = GeneratorStatus.IDLE;
       await this.generatorRepo.save(order.generator);
     }
 
-    if (dto.endTime) order.endTime = dto.endTime;
-    if (dto.totalDuration) order.totalDuration = dto.totalDuration;
+    const savedOrder = await this.orderRepo.save(order);
 
-    return this.orderRepo.save(order);
+    if (dto.returnedRemainingFuel != null) {
+      await this.createFuelRecordOnReturn(order, dto);
+    }
+
+    return savedOrder;
+  }
+
+  private calculateStandardConsumption(order: DispatchOrder, endTime: Date): number {
+    const startTime = order.startTime || order.dispatchTime || order.createdAt;
+    const durationHours = Math.max(0, (endTime.getTime() - startTime.getTime()) / (1000 * 60 * 60));
+    return durationHours * STANDARD_CONSUMPTION_PER_HOUR;
+  }
+
+  private async createFuelRecordOnReturn(order: DispatchOrder, dto: any): Promise<FuelRecord> {
+    const initialFuel = order.oilBucketCapacity || 0;
+    const remainingFuel = Number(dto.returnedRemainingFuel) || 0;
+    const consumption = Number((initialFuel - remainingFuel).toFixed(2));
+
+    if (consumption < 0) {
+      throw new BadRequestException('剩余油量不能大于初始油量');
+    }
+
+    const recordTime = order.returnTime || new Date();
+    const standardConsumption = this.calculateStandardConsumption(order, recordTime);
+
+    const deviation = consumption > 0
+      ? Math.abs(consumption - standardConsumption) / Math.max(standardConsumption, 0.1)
+      : 0;
+    const isAbnormal = deviation > ABNORMAL_THRESHOLD;
+
+    const fuelRecord = this.fuelRecordRepo.create({
+      orderId: order.id,
+      recordTime,
+      initialFuel,
+      remainingFuel,
+      consumption,
+      standardConsumption: Number(standardConsumption.toFixed(2)),
+      abnormalStatus: isAbnormal ? FuelAbnormalStatus.ABNORMAL : FuelAbnormalStatus.NORMAL,
+      photoRequired: isAbnormal,
+      recorder: dto.recorder || order.teamLeader || '',
+      remark: dto.remark || '',
+    });
+
+    return this.fuelRecordRepo.save(fuelRecord);
   }
 
   async complete(id: string): Promise<DispatchOrder> {
