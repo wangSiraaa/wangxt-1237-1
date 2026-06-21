@@ -16,7 +16,8 @@
     "pinia": "^2.1.7",
     "echarts": "^5.4.3",
     "vue-echarts": "^6.6.8",
-    "dayjs": "^1.11.10"
+    "dayjs": "^1.11.10",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.0.0",

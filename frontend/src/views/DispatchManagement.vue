@@ -185,8 +185,9 @@ import {
   getDispatchOrderList, getPendingDispatchList, createDispatchOrder,
   assignDispatchOrder, arriveDispatchOrder, startGenerate,
   returnGenerator, cancelDispatchOrder, deleteDispatchOrder,
-  getDispatchOrderStatistics, getIdleGenerators,
+  getDispatchOrderStatistics,
 } from '../api/dispatch'
+import { getIdleGenerators } from '../api/generator'
 import { levelOptions, orderStatusOptions } from '../utils/constants'
 import dayjs from 'dayjs'
 

@@ -71,16 +71,8 @@ export class BaseStationService {
       .update(BaseStation)
       .set({
         status: BaseStationStatus.POWER_OUT,
+        powerOutTime: powerOutTime || new Date(),
         updatedAt: new Date(),
-      })
-      .whereInIds(ids)
-      .execute();
-
-    await this.repo
-      .createQueryBuilder()
-      .update(BaseStation)
-      .set({
-        status: BaseStationStatus.POWER_OUT,
       })
       .whereInIds(ids)
       .execute();

@@ -24,8 +24,11 @@ export class BaseStation {
   @Column({ length: 100 })
   name: string;
 
-  @Column({ length: 200 })
+  @Column({ length: 200, default: '' })
   address: string;
+
+  @Column({ type: 'timestamp', nullable: true })
+  powerOutTime: Date;
 
   @Column({
     type: 'enum',
